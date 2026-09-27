@@ -37,6 +37,7 @@ const defaultSettings = Object.freeze({
     maxTokens: 2000,
     dedupeCount: 10,
     profileId: '',
+    panelOpacity: 90,
     worldInfoMaxTokens: 2000,
     language: 'ko',
     mode: 'story',
@@ -1291,14 +1292,22 @@ function solidThemeBackground() {
     const color = getComputedStyle(probe).backgroundColor;
     probe.remove();
     const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
-    return m ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : 'rgb(24, 24, 28)';
+    const [r, g, b] = m ? [m[1], m[2], m[3]] : [24, 24, 28];
+    const alpha = Math.min(100, Math.max(50, Number(getSettings().panelOpacity) || 90)) / 100;
+    return alpha >= 1 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function applyPanelBackground(panel = document.getElementById(PANEL_ID)) {
+    if (!panel) return;
+    panel.style.setProperty('--sjf-bg', solidThemeBackground());
+    panel.classList.toggle('sjf-see-through', Number(getSettings().panelOpacity) < 100);
 }
 
 function openPanel() {
     buildPanel();
     const panel = document.getElementById(PANEL_ID);
     // Re-read on every open so a theme change is picked up
-    panel.style.setProperty('--sjf-bg', solidThemeBackground());
+    applyPanelBackground(panel);
     panel.classList.remove('sjf-hidden');
     switchTab(activeTab);
 }
@@ -1317,14 +1326,15 @@ function renderSettingsTab() {
     if (!root) return;
     const s = getSettings();
 
-    const range = (label, key, min, max, step, desc) => {
-        const val = el('b', { text: String(s[key]) });
+    const range = (label, key, min, max, step, desc, onChange, unit = '') => {
+        const val = el('b', { text: `${s[key]}${unit}` });
         const input = el('input', { type: 'range', min, max, step });
         input.value = s[key];
         input.addEventListener('input', () => {
             s[key] = Number(input.value);
-            val.textContent = input.value;
+            val.textContent = `${input.value}${unit}`;
             saveSettings();
+            onChange?.();
         });
         return el('div', { class: 'sjf-card sjf-setting' },
             el('div', { class: 'sjf-setting-head' }, el('span', { class: 'sjf-label', text: label }), val),
@@ -1365,6 +1375,7 @@ function renderSettingsTab() {
         range('참고할 최근 대화 턴 수', 'contextTurns', 0, 30, 1, '0이면 대화는 안 보고 조건·캐릭터 설정·월드인포만 봐요. 많을수록 토큰이 더 들어요.'),
         range('중복 방지로 보낼 이전 결과 수', 'dedupeCount', 0, 20, 1, '새로 뽑을 때 최근 결과를 이만큼 AI에게 보내서 비슷한 소재를 피해요. 0이면 안 보내요. 많을수록 토큰이 더 들어요.'),
         range('최대 응답 토큰', 'maxTokens', 500, 4000, 100, '추천이 중간에 잘리면 올려주세요.'),
+        range('패널 불투명도', 'panelOpacity', 70, 100, 5, '낮출수록 뒤 채팅이 비쳐 보여요. 100%면 완전 불투명.', () => applyPanelBackground(), '%'),
     );
 }
 

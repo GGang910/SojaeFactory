@@ -27,6 +27,12 @@
     overflow-wrap: anywhere;
 }
 
+/* Slightly see-through: blur what's behind so text underneath doesn't compete */
+#sjf_panel.sjf-see-through {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
 #sjf_panel.sjf-hidden {
     display: none;
 }
