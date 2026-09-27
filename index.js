@@ -1253,6 +1253,21 @@ function buildPanel() {
         ),
         tabBar, body);
     document.body.append(panel);
+
+    // Mobile: the on-screen keyboard shrinks the viewport and drags the sticky generate
+    // button up over the field being typed in. Un-stick it while a text field has focus.
+    const isTextField = (t) => t instanceof HTMLTextAreaElement
+        || (t instanceof HTMLInputElement && !['checkbox', 'radio', 'range', 'button'].includes(t.type));
+    panel.addEventListener('focusin', (e) => {
+        if (isTextField(e.target)) panel.classList.add('sjf-typing');
+    });
+    panel.addEventListener('focusout', () => {
+        setTimeout(() => {
+            if (!isTextField(document.activeElement) || !panel.contains(document.activeElement)) {
+                panel.classList.remove('sjf-typing');
+            }
+        }, 0);
+    });
 }
 
 function switchTab(key) {

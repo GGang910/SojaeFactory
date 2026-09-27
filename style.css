@@ -457,6 +457,15 @@
     border-top: 1px solid var(--sjf-line);
 }
 
+/* While typing on mobile, keep the footer in normal flow so it doesn't ride on top of the keyboard */
+#sjf_panel.sjf-typing .sjf-footer {
+    position: static;
+    margin: 0;
+    padding: 4px 0 0;
+    border-top: none;
+    background: transparent;
+}
+
 .sjf-generate {
     display: flex;
     align-items: center;
