@@ -13,7 +13,7 @@ const DAILY_THEMES = ['같이 밥 먹기·요리', '외출·데이트', '선물�
 const MODES = [['story', '전개 방향'], ['daily', '일상 소재']];
 const LANGUAGES = [['ko', '한국어'], ['en', 'English'], ['ja', '日本語'], ['zh', '中文']];
 const LANGUAGE_PROMPT = { ko: '한국어', en: '영어(English)', ja: '일본어(日本語)', zh: '중국어 간체(简体中文)' };
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 const defaultConditions = Object.freeze({
     genres: [],
@@ -47,8 +47,6 @@ const defaultSettings = Object.freeze({
     botMemo: {},
     botCast: {},
     botWorld: {},
-    libraryScope: 'global',
-    memoScope: 'bot',
     conditions: defaultConditions,
 });
 
@@ -111,6 +109,12 @@ function getSettings() {
     if (s.schemaVersion < 8) {
         // v8: world info limit is now in tokens (same counter as ST's lorebook editor)
         delete s.worldInfoMaxChars;
+        s.schemaVersion = 8;
+    }
+    if (s.schemaVersion < 9) {
+        // v9: library/memo scope is per session and defaults to the open bot
+        delete s.libraryScope;
+        delete s.memoScope;
         s.schemaVersion = SCHEMA_VERSION;
     }
     return s;
@@ -787,7 +791,7 @@ async function confirmPopup(text) {
 // ---------- Actions ----------
 function saveToLibrary(x) {
     const s = getSettings();
-    const scope = s.libraryScope === 'bot' && getBotKey() ? 'bot' : 'global';
+    const scope = libraryScope === 'bot' && getBotKey() ? 'bot' : 'global';
     const lib = getLibrary(scope);
     if (lib.some(p => sameItem(p, x))) {
         return toastr.info(`이미 ${scopeLabel(scope)} 보관함에 있어요.`, '소재공장');
@@ -807,6 +811,10 @@ let currentResults = [];
 let freshIds = new Set();
 let currentStatus = '';
 let libraryQuery = '';
+// Library/memo scope for this session. Resets to the bot on every chat change, so saving
+// while chatting with a bot never silently lands in the global library.
+let libraryScope = 'bot';
+let memoScope = 'bot';
 
 function icon(name) {
     return el('i', { class: `fa-solid ${name}` });
@@ -1137,13 +1145,13 @@ function renderLibrary() {
     if (!root) return;
     const s = getSettings();
     const hasBot = !!getBotKey();
-    const scope = s.libraryScope === 'bot' && hasBot ? 'bot' : 'global';
+    const scope = libraryScope === 'bot' && hasBot ? 'bot' : 'global';
     const lib = getLibrary(scope);
 
     const bar = scopeBar([
         ['global', [icon('fa-globe'), '전체']],
         ['bot', [icon('fa-robot'), hasBot ? getBotName() : '이 봇'], !hasBot],
-    ], scope, v => { s.libraryScope = v; saveSettings(); renderLibrary(); });
+    ], scope, v => { libraryScope = v; renderLibrary(); });
 
     const search = el('input', { class: 'text_pole', placeholder: '🔍 제목·내용 검색' });
     search.value = libraryQuery;
@@ -1164,6 +1172,15 @@ function renderLibrary() {
                     if (!v) return;
                     Object.assign(x, v); saveSettings(); drawList();
                 }),
+                ...(hasBot ? [actionBtn(scope === 'bot' ? 'fa-globe' : 'fa-robot', scope === 'bot' ? '전체로' : '봇으로', () => {
+                    const target = getLibrary(scope === 'bot' ? 'global' : 'bot');
+                    const idx = lib.indexOf(x);
+                    if (idx >= 0) lib.splice(idx, 1);
+                    if (!target.some(p => sameItem(p, x))) target.unshift(x);
+                    saveSettings();
+                    toastr.success(`${scope === 'bot' ? '전체' : getBotName()} 보관함으로 옮겼어요`, '소재공장');
+                    renderLibrary();
+                })] : []),
                 actionBtn('fa-trash', '삭제', async () => {
                     if (!await confirmPopup(`보관함에서 "${x.title}"을(를) 삭제할까요?`)) return;
                     const idx = lib.indexOf(x);
@@ -1194,12 +1211,12 @@ function renderMemo() {
     if (!root) return;
     const s = getSettings();
     const hasBot = !!getBotKey();
-    const scope = s.memoScope === 'bot' && hasBot ? 'bot' : 'global';
+    const scope = memoScope === 'bot' && hasBot ? 'bot' : 'global';
 
     const bar = scopeBar([
         ['global', [icon('fa-globe'), '전체']],
         ['bot', [icon('fa-robot'), hasBot ? getBotName() : '이 봇'], !hasBot],
-    ], scope, v => { s.memoScope = v; saveSettings(); renderMemo(); });
+    ], scope, v => { memoScope = v; renderMemo(); });
 
     const read = () => scope === 'bot' ? (s.botMemo[getBotKey()] ?? '') : s.globalMemo;
     const write = (text) => {
@@ -1405,6 +1422,8 @@ function registerSlashCommand() {
 
 // ---------- Init ----------
 function onChatChanged() {
+    libraryScope = 'bot';
+    memoScope = 'bot';
     const d = getChatData();
     loadModeResults();
     if (isPanelOpen()) switchTab(activeTab);
