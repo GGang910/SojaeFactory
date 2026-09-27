@@ -1281,9 +1281,19 @@ function isPanelOpen() {
     return !document.getElementById(PANEL_ID)?.classList.contains('sjf-hidden');
 }
 
+// Theme tint with its alpha dropped, so the panel is opaque but keeps the theme's color
+function solidThemeBackground() {
+    const tint = getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBlurTintColor').trim();
+    const m = tint.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+    return m ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : (tint || 'rgb(24, 24, 28)');
+}
+
 function openPanel() {
     buildPanel();
-    document.getElementById(PANEL_ID).classList.remove('sjf-hidden');
+    const panel = document.getElementById(PANEL_ID);
+    // Re-read on every open so a theme change is picked up
+    panel.style.setProperty('--sjf-bg', solidThemeBackground());
+    panel.classList.remove('sjf-hidden');
     switchTab(activeTab);
 }
 
