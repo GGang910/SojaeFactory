@@ -1283,9 +1283,15 @@ function isPanelOpen() {
 
 // Theme tint with its alpha dropped, so the panel is opaque but keeps the theme's color
 function solidThemeBackground() {
-    const tint = getComputedStyle(document.documentElement).getPropertyValue('--SmartThemeBlurTintColor').trim();
-    const m = tint.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
-    return m ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : (tint || 'rgb(24, 24, 28)');
+    // Let the browser normalize whatever format the theme uses (hex8, hsla, rgba...) into rgb()/rgba()
+    const probe = document.createElement('div');
+    probe.style.backgroundColor = 'var(--SmartThemeBlurTintColor)';
+    probe.style.display = 'none';
+    document.body.append(probe);
+    const color = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+    return m ? `rgb(${m[1]}, ${m[2]}, ${m[3]})` : 'rgb(24, 24, 28)';
 }
 
 function openPanel() {
