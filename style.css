@@ -659,8 +659,82 @@
     font-size: 1.05em;
 }
 
-.sjf-setting input[type="range"] {
-    width: 100%;
+.sjf-range-hint {
+    font-size: 0.78em;
+    color: var(--sjf-muted);
+}
+
+.sjf-stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sjf-step-btn {
+    flex-shrink: 0;
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 40px;
+    border: 1px solid var(--sjf-line);
+    border-radius: 10px;
+    background: var(--sjf-soft-2);
+    color: var(--sjf-text);
+    font-size: 0.9em;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.sjf-step-btn:active {
+    background: var(--sjf-accent-soft);
+}
+
+.sjf-step-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
+}
+
+.sjf-num-box {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    height: 40px;
+    border: 1px solid var(--sjf-line);
+    border-radius: 10px;
+    background: var(--sjf-bg, transparent);
+    cursor: text;
+}
+
+#sjf_panel .sjf-num-input {
+    width: 5.5em;
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--sjf-accent);
+    font-size: 1.05em;
+    font-weight: 700;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+#sjf_panel .sjf-num-input::-webkit-outer-spin-button,
+#sjf_panel .sjf-num-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+#sjf_panel .sjf-num-input:focus {
+    outline: none;
+}
+
+.sjf-num-unit {
+    color: var(--sjf-muted);
+    font-size: 0.9em;
 }
 
 #sjf_panel select.sjf-select {

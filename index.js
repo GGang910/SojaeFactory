@@ -1343,19 +1343,37 @@ function renderSettingsTab() {
     if (!root) return;
     const s = getSettings();
 
+    // − [number] + stepper instead of a slider: sliders grab the touch while scrolling on mobile
     const range = (label, key, min, max, step, desc, onChange, unit = '') => {
-        const val = el('b', { text: `${s[key]}${unit}` });
-        const input = el('input', { type: 'range', min, max, step });
+        const clamp = (v) => Math.min(max, Math.max(min, Math.round(v / step) * step));
+        const input = el('input', { type: 'number', class: 'sjf-num-input', min, max, step, inputmode: 'numeric' });
         input.value = s[key];
-        input.addEventListener('input', () => {
-            s[key] = Number(input.value);
-            val.textContent = `${input.value}${unit}`;
+        let minus, plus;
+        const set = (v) => {
+            const n = clamp(Number(v));
+            if (Number.isNaN(n)) { input.value = s[key]; return; }
+            s[key] = n;
+            input.value = n;
+            minus.disabled = n <= min;
+            plus.disabled = n >= max;
             saveSettings();
             onChange?.();
-        });
+        };
+        minus = el('button', { class: 'sjf-step-btn', title: '줄이기', onclick: () => set(s[key] - step) }, icon('fa-minus'));
+        plus = el('button', { class: 'sjf-step-btn', title: '늘리기', onclick: () => set(s[key] + step) }, icon('fa-plus'));
+        minus.disabled = s[key] <= min;
+        plus.disabled = s[key] >= max;
+        input.addEventListener('change', () => set(input.value));
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
+
         return el('div', { class: 'sjf-card sjf-setting' },
-            el('div', { class: 'sjf-setting-head' }, el('span', { class: 'sjf-label', text: label }), val),
-            input,
+            el('div', { class: 'sjf-setting-head' },
+                el('span', { class: 'sjf-label', text: label }),
+                el('span', { class: 'sjf-range-hint', text: `${min}~${max}${unit}` })),
+            el('div', { class: 'sjf-stepper' },
+                minus,
+                el('label', { class: 'sjf-num-box' }, input, unit ? el('span', { class: 'sjf-num-unit', text: unit }) : null),
+                plus),
             desc ? el('div', { class: 'sjf-note', text: desc }) : null);
     };
 
