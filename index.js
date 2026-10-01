@@ -7,13 +7,14 @@ const SEASONS = ['봄', '여름', '가을', '겨울'];
 const EVENTS = ['새해', '발렌타인', '화이트데이', '벚꽃', '장마', '여름휴가', '축제·학교행사', '추석·명절', '할로윈', '시험기간', '수학여행', '생일', '첫눈', '크리스마스'];
 const GENRES = ['학원물', '캠퍼스', '오피스', '현대일상', '아이돌·연예계', '궁중·사극', '로판', '판타지', '그리스로마신화', '무협', '헌터·능력자', '아포칼립스', '조직·느와르', '오컬트·호러', '스릴러·미스터리', 'SF'];
 const MOODS = ['달달', '설렘', '몽글몽글', '애틋', '코믹', '잔잔한 일상', '긴장감', '아슬아슬', '질투', '집착', '위로·힐링', '쓸쓸·먹먹', '피폐', '갈등', '스릴·위기', '비장', '관능·텐션', 'NSFW'];
-const RELATIONS = ['로맨스로', '혐관으로', '혐관→로맨스', '썸·밀당', '짝사랑', '집착·소유욕', '구원·치유', '라이벌·경쟁', '신뢰 쌓기', '오해·갈등', '질투 유발', '거리 두기', '재회·회복', '배신·파국'];
-const SPEEDS = ['천천히', '적당히', '급전개'];
 const DAILY_THEMES = ['같이 밥 먹기·요리', '외출·데이트', '선물·깜짝 이벤트', '아플 때 간호', '아침·잠버릇', '장난·내기', '취미 공유', '비·날씨 핑계', '사소한 질투', '추억·사진', '집안일·심부름', '밤샘·수다', '낮잠·휴식', '산책·나들이', '서로 챙겨주기', '몰래 준비한 것', '둘만의 습관'];
-const MODES = [['story', '전개 방향'], ['daily', '일상 소재']];
+const MODES = [['arc', '서사 로드맵'], ['daily', '일상 소재']];
+const MODE_ICONS = { arc: 'fa-route', daily: 'fa-mug-hot' };
+const ARC_GOALS = ['연인', '서로에게 유일한 사람', '서로 의지하는 사이', '혐관 → 연인', '친구 → 연인', '짝사랑 → 쌍방', '집착·소유', '구원·치유', '부부·평생 약속'];
+const ARC_STEPS = [3, 4, 5, 6, 7];
 const LANGUAGES = [['ko', '한국어'], ['en', 'English'], ['ja', '日本語'], ['zh', '中文']];
 const LANGUAGE_PROMPT = { ko: '한국어', en: '영어(English)', ja: '일본어(日本語)', zh: '중국어 간체(简体中文)' };
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const defaultConditions = Object.freeze({
     genres: [],
@@ -25,6 +26,9 @@ const defaultConditions = Object.freeze({
     speed: '천천히',
     keepDistance: true,
     customDaily: '',
+    arcGoals: [],
+    customGoal: '',
+    arcSteps: 5,
     request: '',
     season: 'none',
     events: [],
@@ -40,7 +44,7 @@ const defaultSettings = Object.freeze({
     panelOpacity: 90,
     worldInfoMaxTokens: 2000,
     language: 'ko',
-    mode: 'story',
+    mode: 'arc',
     library: [],
     botLibrary: {},
     globalMemo: '',
@@ -115,6 +119,14 @@ function getSettings() {
         // v9: library/memo scope is per session and defaults to the open bot
         delete s.libraryScope;
         delete s.memoScope;
+        s.schemaVersion = 9;
+    }
+    if (s.schemaVersion < 10) {
+        // v10: "전개 방향" replaced by "서사 로드맵" (relations/speed -> goal/steps)
+        if (s.mode === 'story') s.mode = 'arc';
+        delete s.conditions.relations;
+        delete s.conditions.customRelation;
+        delete s.conditions.speed;
         s.schemaVersion = SCHEMA_VERSION;
     }
     return s;
@@ -152,6 +164,7 @@ function getChatData() {
     const d = chatMetadata[MODULE_NAME];
     d.lastResults ??= [];
     d.dailyResults ??= [];
+    d.arcResults ??= [];
     if (Array.isArray(d.pinned)) {
         // v4: pinned tab removed - move this chat's pinned items into the library
         const lib = getSettings().library;
@@ -178,16 +191,17 @@ function getChatData() {
     }
     d.lastResults.forEach(migrateItem);
     d.dailyResults.forEach(migrateItem);
+    d.arcResults.forEach(migrateItem);
     return d;
 }
 
 // Each mode keeps its own last results in the chat
 function resultKeys(mode) {
-    return mode === 'daily' ? ['dailyResults', 'dailyStatus'] : ['lastResults', 'lastStatus'];
+    return mode === 'daily' ? ['dailyResults', 'dailyStatus'] : ['arcResults', 'arcStatus'];
 }
 
 // In-memory copy per mode, used when no chat is open
-const modeCache = { story: { results: [], status: '' }, daily: { results: [], status: '' } };
+const modeCache = { arc: { results: [], status: '' }, daily: { results: [], status: '' } };
 
 function stashModeResults(mode) {
     modeCache[mode] = { results: [...currentResults], status: currentStatus };
@@ -260,14 +274,7 @@ function cleanText(str, max) {
     return t;
 }
 
-// How far each speed option lets the relationship move per material
-const SPEED_GUIDE = {
-    '천천히': '관계 거리는 거의 좁히지 말 것. 감정이 움직일 "계기"나 "씨앗"만 심는 수준 (의식하게 되는 사건, 작은 균열, 의외의 면 발견 등)',
-    '적당히': '관계 거리를 딱 한 단계만 좁히거나 흔드는 수준',
-    '급전개': '큰 사건으로 관계를 크게 흔들어도 됨. 단, 캐릭터 성격과 개연성은 유지',
-};
-
-// Each material should take a different route toward the same "next step"
+// Each roadmap step should use a different kind of trigger
 const STORY_APPROACHES = [
     'char가 먼저 행동하거나 제안한다',
     'user에게 선택이나 대답을 요구하는 상황이 생긴다',
@@ -435,6 +442,8 @@ async function buildGenerationPrompt({ rerollOf = null } = {}) {
     const moods = [...cond.moods, ...splitCustom(cond.customMood)];
     if (moods.length) req.push(`- 분위기(톤): ${moods.join(', ')} ※ 톤일 뿐, 관계 진전 속도와는 무관`);
     const daily = s.mode === 'daily';
+    const arc = !daily;
+    const steps = ARC_STEPS.includes(Number(cond.arcSteps)) ? Number(cond.arcSteps) : 5;
     if (daily) {
         const wanted = splitCustom(cond.customDaily);
         if (wanted.length) req.push(`- 원하는 일상 테마: ${wanted.join(', ')}`);
@@ -443,10 +452,9 @@ async function buildGenerationPrompt({ rerollOf = null } = {}) {
         const events = [...cond.events, ...splitCustom(cond.customEvent)];
         if (events.length) req.push(`- 이벤트/시기: ${events.join(', ')}`);
     } else {
-        const relations = [...cond.relations, ...splitCustom(cond.customRelation)];
-        if (relations.length) req.push(`- 관계가 장기적으로 향할 방향: ${relations.join(', ')}`);
-        const speed = cond.speed || '천천히';
-        req.push(`- 전개 속도: ${speed} → ${SPEED_GUIDE[speed] ?? SPEED_GUIDE['천천히']}`);
+        const goals = [...cond.arcGoals, ...splitCustom(cond.customGoal)];
+        req.push(`- 목표 관계: ${goals.length ? goals.join(', ') : '연인 (지정 없음 - 설정과 흐름에 가장 어울리는 로맨스 결말)'}`);
+        req.push(`- 단계 수: ${steps}단계`);
     }
     if (cond.request.trim()) req.push(`- 추가 요청: ${cond.request.trim()}`);
     if (req.length) lines.push(`[요청 조건]\n${req.join('\n')}`);
@@ -460,30 +468,50 @@ ${cond.keepDistance
 4. 캐릭터 설정의 배경·시대·장소에 맞는 생활감 있는 소재. (예: 사극이면 사극의 일상)
 5. 소재마다 장소·활동·주도하는 쪽이 모두 달라야 한다. 같은 구도나 소품을 두 번 쓰지 말 것.
 6. 여러 인물이 나오는 봇이면 봇 이름 대신 실제 인물 이름을 쓰고, 소재마다 누가 중심인지 분명히 한다.`);
-    else lines.push(`[소재 제안 원칙]
-1. 먼저 캐릭터 설정과 대화를 보고 char와 user의 현재 관계(감정 거리, 신뢰도, 서로에 대한 인식)를 판단하고, 관계 방향과 전개 속도에 맞춰 "다음으로 가야 할 한 걸음"을 정한다. (예: 경계 → 대화를 트는 사이, 호기심 → 서로의 사정을 아는 사이) 모든 소재는 그 한 걸음을 이루기 위한 서로 다른 방법이다. 아직 쌓이지 않은 단계로 건너뛰지 말 것.
-2. 다음 채팅(1~3턴) 안에 바로 시작할 수 있는 전개. 지금 상황에서 자연스럽게 이어지되, 단순한 반응(바라본다, 느낀다)이 아니라 상황을 바꾸는 행동이나 사건이어야 한다.
-3. 구체적으로: 누가 / 무엇을 한다(구체적인 행동·대사·물건·장소) / 그래서 둘 사이에 무엇이 생기거나 드러나는지. ${VAGUE_BAN}
-4. 소재마다 아래 접근법 중 서로 다른 것을 하나씩 쓴다. 주도하는 쪽·계기·장소·결과가 모두 달라야 하고, 같은 구도(예: 지친 char를 user가 위로)를 반복하지 말 것.
+    else lines.push(`[서사 로드맵 설계 원칙]
+1. 현재 관계 진단: 캐릭터 설정·월드인포·대화를 보고 char와 user가 지금 서로를 얼마나 아는지, 감정, 신뢰, 신체적 거리, 그리고 둘 사이를 막는 장애물(신분, 상처, 비밀, 오해, 가치관 등)을 판단한다.
+2. 현재 관계에서 목표 관계까지를 정확히 ${steps}단계로 나눈다. 각 단계는 관계가 실제로 한 칸 바뀌는 지점이다. 참고 사다리(단계 수에 맞게 압축·조정): 낯선 사람 → 서로를 인식 → 이름과 사정을 앎 → 사적인 시간을 공유 → 약점을 보임 → 의지하게 됨 → 감정을 자각 → 흔들림·위기 → 확인·고백 → 목표.
+3. 순서와 인과: 각 단계의 사건은 이전 단계의 결과가 있어야 성립한다. 감정이 갑자기 튀는 비약 금지. 장애물이 중반에 한 번 이상 관계를 흔들고, 그걸 넘으면서 관계가 깊어지게 한다.
+4. 1단계는 현재 상황에서 다음 채팅에 바로 시작할 수 있어야 한다. 마지막 단계가 끝나면 목표 관계에 도달해야 한다.
+5. 각 단계는 구체적으로: 어떤 사건이 일어나는지(누가, 무엇을, 어디서) + 그 사건으로 둘의 감정·관계가 어떻게 바뀌는지. ${VAGUE_BAN}
+6. 단계마다 계기를 다양하게 쓴다(같은 패턴 반복 금지):
 ${STORY_APPROACHES.map(x => `   - ${x}`).join('\n')}
-5. 캐릭터 설정·월드인포·도입부에 나온 인물, 장소, 예정된 일, 떡밥, 과거사를 적극 활용한다. 성격과 개연성 유지.
-6. 여러 인물이 나오는 봇이면 봇 이름 대신 실제 인물 이름을 쓰고, 소재마다 누가 중심인지 분명히 한다.`);
+7. char의 성격(방어기제, 가치관, 상처)이 왜 그 단계에서 변하는지 설득력 있게. 설정·월드인포·도입부의 인물, 장소, 예정된 일, 떡밥, 과거사를 적극 활용한다.
+8. 여러 인물이 나오는 봇이면 봇 이름 대신 실제 인물 이름을 쓴다.`);
 
     // Recent results are sent so new ideas don't repeat them (capped to keep tokens low)
     const recentOthers = currentResults.filter(x => x.id !== rerollOf?.id).slice(0, Math.max(0, Number(s.dedupeCount) || 0)).map(x => `- ${x.directive}`);
-    if (!rerollOf && recentOthers.length) {
+    if (daily && !rerollOf && recentOthers.length) {
         lines.push(`[이미 추천한 소재 - 비슷한 것 금지]\n${recentOthers.join('\n')}`);
     }
 
-    if (rerollOf) {
+    if (rerollOf && arc) {
+        const n = currentResults.findIndex(x => x.id === rerollOf.id) + 1;
+        const map = currentResults.map((x, i) => `${i + 1}단계 [${x.title}] ${x.directive}${x.reach ? ` (도달: ${x.reach})` : ''}`);
+        lines.push(`[교체 요청 - 로드맵 중 ${n}단계만 다시]
+현재 로드맵:
+${map.join('\n')}
+
+${n}단계만 새로 짜라. 앞 단계에서 자연스럽게 이어지고 다음 단계로 넘어갈 수 있어야 하며, 기존 ${n}단계와는 다른 사건이어야 한다. 단계 이름도 그에 맞게.`);
+    } else if (rerollOf) {
         const others = recentOthers;
         lines.push(`[교체 요청]
 아래 소재가 마음에 들지 않는다. 같은 조건으로 접근법·주도하는 쪽·장소가 다른, 더 구체적인 아이디어 1개를 새로 제안하라.
 - 교체할 소재: ${rerollOf.directive}${others.length ? `\n- 이미 있는 다른 소재(겹치지 말 것):\n${others.join('\n')}` : ''}`);
     }
 
-    const count = rerollOf ? 1 : Math.min(8, Math.max(1, Number(s.count) || 5));
     const lang = LANGUAGE_PROMPT[s.language] || LANGUAGE_PROMPT.ko;
+    if (arc) {
+        const n = rerollOf ? 1 : steps;
+        lines.push(`[출력 형식]
+단계 ${n}개를 아래 JSON 객체 하나로만 출력. 설명, 머리말, 코드블록 금지.
+{"status": "현재 관계 → 목표 관계 (한국어 한 문장)", "items": [{"title": "단계 이름: 관계가 어디서 어디로 바뀌는지 (한국어, 20자 이내, 예: 낯선 사람 → 이름을 아는 사이)", "directive": "이 단계의 서사", "reach": "이 단계가 끝났을 때 두 사람의 관계 상태 (한국어, 짧게)"}]}
+- items는 ${rerollOf ? '다시 짠 그 단계 1개' : '1단계부터 순서대로 정확히 ' + n + '개'}.
+- directive: ${lang}로 작성. 2문장, 140자(영어는 45단어, 중국어는 90자) 이내. 이 단계에서 일어날 핵심 사건(누가, 무엇을, 어디서)과 그 결과 감정·관계가 어떻게 바뀌는지. 캐릭터 이름 사용. 화살표 기호·OOC 표기·괄호 머리말 금지.`);
+        return lines.join('\n\n');
+    }
+
+    const count = rerollOf ? 1 : Math.min(8, Math.max(1, Number(s.count) || 5));
     lines.push(`[출력 형식]
 소재 ${count}개를 아래 JSON 객체 하나로만 출력. 설명, 머리말, 코드블록 금지.
 {"status": "${daily ? '현재 char와 user의 관계 (한국어 한 문장)' : '현재 관계 → 다음 한 걸음 (한국어 한 문장)'}", "items": [{"title": "한국어 짧은 제목(15자 이내)", "directive": "소재 한 문장", "effect": "이 소재로 둘 사이에 생기는 변화 (한국어, 짧게)"}]}
@@ -498,7 +526,7 @@ function splitCustom(str) {
 }
 
 const SYSTEM_PROMPTS = {
-    story: '너는 장편 롤플레이의 플롯 작가다. 다음 채팅에서 바로 쓸 수 있는, 관계를 한 걸음 움직이는 구체적인 전개(행동, 사건, 계기)를 제안한다. 막연한 분위기 묘사가 아니라 실제로 무슨 일이 일어나는지를 쓴다. 롤플레이 본문을 이어 쓰지 말고, 요청된 JSON만 출력한다.',
+    arc: '너는 장편 롤플레이의 관계 서사를 설계하는 플롯 작가다. 지금 관계에서 목표 관계까지, 이전 단계가 쌓여야 다음이 성립하는 단계별 서사 로드맵을 짠다. 단계마다 실제로 무슨 사건이 일어나고 그 결과 관계가 어떻게 바뀌는지를 구체적으로 쓴다. 롤플레이 본문을 이어 쓰지 말고, 요청된 JSON만 출력한다.',
     daily: '너는 롤플레이의 일상 에피소드 작가다. 두 캐릭터의 현재 관계에 어울리는 소소하고 사랑스러운 일상 소재를 제안한다. 롤플레이 본문을 이어 쓰지 말고, 요청된 JSON만 출력한다.',
     dailyFree: '너는 롤플레이의 일상 에피소드 작가다. 선택된 테마와 분위기에 맞는 일상 소재를 제안한다. 롤플레이 본문을 이어 쓰지 말고, 요청된 JSON만 출력한다.',
 };
@@ -513,7 +541,8 @@ function normalizeItem(o) {
     const title = cleanText(o.title, 60);
     const directive = cleanText(o.directive ?? o.summary, 300);
     if (!title && !directive) return null;
-    return { id: newId(), title: title || '(제목 없음)', directive };
+    const reach = cleanText(o.reach, 140);
+    return { id: newId(), title: title || '(제목 없음)', directive, ...(reach ? { reach } : {}) };
 }
 
 function parseItems(raw) {
@@ -666,7 +695,7 @@ async function runGeneration(opts = {}) {
     renderResults();
     try {
         const raw = await requestCompletion(
-            s.mode === 'daily' && !s.conditions.keepDistance ? SYSTEM_PROMPTS.dailyFree : (SYSTEM_PROMPTS[s.mode] ?? SYSTEM_PROMPTS.story),
+            s.mode === 'daily' && !s.conditions.keepDistance ? SYSTEM_PROMPTS.dailyFree : (SYSTEM_PROMPTS[s.mode] ?? SYSTEM_PROMPTS.arc),
             await buildGenerationPrompt(opts),
             Number(s.maxTokens) || 2000,
         );
@@ -684,6 +713,11 @@ async function runGeneration(opts = {}) {
             const idx = currentResults.findIndex(x => x.id === opts.rerollOf.id);
             if (idx >= 0) currentResults.splice(idx, 1, items[0]);
             else currentResults.unshift(items[0]);
+        } else if (s.mode === 'arc') {
+            // A roadmap is one ordered plan: a new one replaces the old
+            currentResults = items;
+            currentStatus = status;
+            freshIds = new Set(items.map(x => x.id));
         } else {
             // Newest batch on top, keep at most MAX_RESULTS
             currentResults = [...items, ...currentResults].slice(0, MAX_RESULTS);
@@ -704,7 +738,7 @@ async function runGeneration(opts = {}) {
             card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             card?.classList.add('sjf-flash');
         } else {
-            toastr.success(`소재 ${items.length}개 도착!`, '소재공장');
+            toastr.success(s.mode === 'arc' ? `서사 로드맵 ${items.length}단계 완성!` : `소재 ${items.length}개 도착!`, '소재공장');
         }
     } catch (err) {
         console.error(`[${MODULE_NAME}] Generation failed`, err);
@@ -859,6 +893,7 @@ function renderCard(x, actions, { num = null, fresh = false } = {}) {
             el('span', { class: 'sjf-card-title', text: x.title }),
             fresh ? el('span', { class: 'sjf-new', text: 'NEW' }) : null),
         x.directive ? el('div', { class: 'sjf-card-directive', text: x.directive }) : null,
+        x.reach ? el('div', { class: 'sjf-card-reach' }, icon('fa-flag-checkered'), el('span', { text: ` 도달: ${x.reach}` })) : null,
         el('div', { class: 'sjf-actions' }, actions),
     );
 }
@@ -1026,7 +1061,7 @@ function renderRecommendTab() {
     const join = (...lists) => lists.flat().filter(Boolean).join(', ');
     const seasonText = () => SEASONS.includes(cond.season) ? cond.season : '';
 
-    const modeBar = scopeBar(MODES.map(([v, t]) => [v, [icon(v === 'daily' ? 'fa-mug-hot' : 'fa-compass'), t]]), s.mode, v => {
+    const modeBar = scopeBar(MODES.map(([v, t]) => [v, [icon(MODE_ICONS[v]), t]]), s.mode, v => {
         if (isGenerating) return toastr.info('추천이 끝난 뒤에 바꿔주세요.', '소재공장');
         stashModeResults(s.mode);
         s.mode = v;
@@ -1039,7 +1074,7 @@ function renderRecommendTab() {
         ? (cond.keepDistance
             ? '관계는 그대로 두고, 지금 사이에서 즐길 수 있는 소소한 일상 에피소드'
             : '관계 단계와 상관없이, 고른 테마·분위기 그대로의 일상 에피소드')
-        : '관계를 한 걸음씩 움직일 사건 · 계기 · 갈등 · 복선' });
+        : '지금 관계에서 목표 관계까지, 차근차근 밟아갈 서사를 단계별로 짜줘요' });
 
     const botKey = getBotKey();
     const castSection = botKey ? (() => {
@@ -1074,14 +1109,15 @@ function renderRecommendTab() {
                 chipGroup('이벤트·시기', EVENTS.map(x => [x, x]), v => cond.events.includes(v), v => toggleInArray(cond.events, v)),
                 textField(null, 'customEvent', { placeholder: '직접 입력 (예: 문화제 준비, 비 오는 날)' })),
         ] : [
-            section('relation', 'fa-heart', '관계 방향', () => join(cond.relations, splitCustom(cond.customRelation)),
-                chipGroup(null, RELATIONS.map(x => [x, x]), v => cond.relations.includes(v), v => toggleInArray(cond.relations, v)),
-                textField(null, 'customRelation', { placeholder: '직접 입력 (예: 주종관계 역전)' })),
-            section('speed', 'fa-gauge-high', '전개 속도', () => cond.speed || '천천히',
-                chipGroup(null, SPEEDS.map(x => [x, x]), v => cond.speed === v, v => { cond.speed = v; })),
+            section('goal', 'fa-heart', '목표 관계', () => join(cond.arcGoals, splitCustom(cond.customGoal)),
+                chipGroup(null, ARC_GOALS.map(x => [x, x]), v => cond.arcGoals.includes(v), v => toggleInArray(cond.arcGoals, v)),
+                textField(null, 'customGoal', { placeholder: '직접 입력 (예: 주종관계 역전 후 연인, 서로를 구원)' })),
+            section('steps', 'fa-stairs', '단계 수', () => `${cond.arcSteps || 5}단계`,
+                chipGroup(null, ARC_STEPS.map(x => [x, `${x}단계`]), v => Number(cond.arcSteps) === v, v => { cond.arcSteps = v; setBusy(isGenerating); }),
+                el('div', { class: 'sjf-note', text: '단계가 많을수록 더 천천히, 촘촘하게 쌓아가요.' })),
         ]),
         section('request', 'fa-pen-nib', '추가 요청', () => cleanText(cond.request, 24),
-            textField(null, 'request', { multiline: true, placeholder: daily ? '예: 깡통과 깡캐가 티격태격하다 웃게 되는 에피소드' : '예: 깡통과 깡캐 둘만 남게 되는 상황 위주로' })),
+            textField(null, 'request', { multiline: true, placeholder: daily ? '예: 깡통과 깡캐가 티격태격하다 웃게 되는 에피소드' : '예: 고백은 깡캐가 먼저, 중간에 큰 오해 한 번' })),
         ...(castSection ? [castSection] : []),
     ];
 
@@ -1092,7 +1128,7 @@ function renderRecommendTab() {
     } }, icon('fa-rotate-left'), ' 조건 초기화');
 
     const genBtn = el('button', { id: 'sjf_generate', class: 'sjf-generate', onclick: () => runGeneration() },
-        icon('fa-wand-magic-sparkles'), el('span', { text: ` 소재 ${s.count}개 추천받기` }));
+        icon('fa-wand-magic-sparkles'), el('span', { text: ` ${generateLabel()}` }));
     const langName = LANGUAGES.find(([v]) => v === s.language)?.[1] ?? '한국어';
     const context = hasChat()
         ? (Number(s.contextTurns) > 0 ? `최근 ${s.contextTurns}턴 참고` : '대화 참고 안 함')
@@ -1111,15 +1147,21 @@ function renderRecommendTab() {
 function renderResults() {
     const box = document.getElementById('sjf_results');
     if (!box) return;
+    const arc = getSettings().mode === 'arc';
     if (!currentResults.length) {
-        box.replaceChildren(el('div', { class: 'sjf-empty' }, icon('fa-seedling'), el('div', { text: '조건을 고르고 추천받기를 눌러보세요' })));
+        box.replaceChildren(el('div', { class: 'sjf-empty' }, icon(arc ? 'fa-route' : 'fa-seedling'),
+            el('div', { text: arc ? '목표 관계와 단계 수를 고르고 로드맵을 짜보세요' : '조건을 고르고 추천받기를 눌러보세요' })));
         return;
     }
+    const roadmapText = () => currentResults.map((x, i) => `${i + 1}단계 [${x.title}] ${x.directive}`).join('\n');
     box.replaceChildren(
         el('div', { class: 'sjf-row' },
-            el('div', { class: 'sjf-heading' }, `추천 결과 `, el('b', { text: `${currentResults.length}` }), ` / ${MAX_RESULTS}`),
-            el('button', { class: 'sjf-link', text: '전체 지우기', onclick: async () => {
-                if (!await confirmPopup(`추천 결과 ${currentResults.length}개를 모두 지울까요? (보관함은 그대로예요)`)) return;
+            arc
+                ? el('div', { class: 'sjf-heading' }, '서사 로드맵 · ', el('b', { text: `${currentResults.length}단계` }))
+                : el('div', { class: 'sjf-heading' }, `추천 결과 `, el('b', { text: `${currentResults.length}` }), ` / ${MAX_RESULTS}`),
+            arc ? el('button', { class: 'sjf-link', onclick: () => copyText(roadmapText()) }, icon('fa-copy'), ' 전체 복사') : null,
+            el('button', { class: 'sjf-link', text: '지우기', onclick: async () => {
+                if (!await confirmPopup(arc ? '이 로드맵을 지울까요? (보관함은 그대로예요)' : `추천 결과 ${currentResults.length}개를 모두 지울까요? (보관함은 그대로예요)`)) return;
                 currentResults = [];
                 freshIds = new Set();
                 currentStatus = '';
@@ -1128,14 +1170,16 @@ function renderResults() {
                 renderResults();
             } }),
         ),
-        ...(currentStatus ? [el('div', { class: 'sjf-status' }, icon('fa-eye'), el('span', {}, el('b', { text: getSettings().mode === 'daily' ? 'AI가 본 현재 관계 ' : 'AI가 본 관계 흐름 ' }), currentStatus))] : []),
-        el('div', { class: 'sjf-note', text: `최근에 뽑은 게 위로 쌓이고, 최대 ${MAX_RESULTS}개까지 저장돼요. 넘치면 오래된 것부터 지워져요.` }),
+        ...(currentStatus ? [el('div', { class: 'sjf-status' }, icon('fa-eye'), el('span', {}, el('b', { text: arc ? '현재 → 목표 ' : 'AI가 본 현재 관계 ' }), currentStatus))] : []),
+        el('div', { class: 'sjf-note', text: arc
+            ? '1단계부터 순서대로 진행해요. 마음에 안 드는 단계는 [다시 짜기]로 그 단계만 앞뒤에 맞게 바꿔요. 새로 짜면 이 로드맵은 바뀌어요.'
+            : `최근에 뽑은 게 위로 쌓이고, 최대 ${MAX_RESULTS}개까지 저장돼요. 넘치면 오래된 것부터 지워져요.` }),
         ...currentResults.map((x, i) => renderCard(x, [
             actionBtn('fa-star', '보관', () => saveToLibrary(x)),
             actionBtn('fa-copy', '복사', () => copyText(itemToText(x))),
             rerollingId === x.id
-                ? actionBtn('fa-spinner fa-spin', '리롤 중…', () => {}, 'sjf-busy')
-                : actionBtn('fa-rotate', '리롤', () => runGeneration({ rerollOf: x })),
+                ? actionBtn('fa-spinner fa-spin', arc ? '짜는 중…' : '리롤 중…', () => {}, 'sjf-busy')
+                : actionBtn('fa-rotate', arc ? '다시 짜기' : '리롤', () => runGeneration({ rerollOf: x })),
         ], { num: i + 1, fresh: freshIds.has(x.id) })),
     );
 }
@@ -1239,12 +1283,17 @@ function renderMemo() {
     );
 }
 
+function generateLabel() {
+    const s = getSettings();
+    return s.mode === 'arc' ? `${s.conditions.arcSteps || 5}단계 로드맵 짜기` : `소재 ${s.count}개 추천받기`;
+}
+
 function setBusy(busy) {
     const btn = document.getElementById('sjf_generate');
     if (!btn) return;
     btn.disabled = busy;
     btn.classList.toggle('sjf-busy', busy);
-    btn.querySelector('span').textContent = busy ? ' 소재 뽑는 중…' : ` 소재 ${getSettings().count}개 추천받기`;
+    btn.querySelector('span').textContent = busy ? (getSettings().mode === 'arc' ? ' 로드맵 짜는 중…' : ' 소재 뽑는 중…') : ` ${generateLabel()}`;
     btn.querySelector('i').className = busy ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-wand-magic-sparkles';
     btn.closest('.sjf-footer')?.classList.toggle('sjf-busy', busy);
 }

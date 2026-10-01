@@ -590,6 +590,18 @@
     line-height: 1.55;
 }
 
+.sjf-card-reach {
+    font-size: 0.82em;
+    color: var(--sjf-muted);
+    padding: 6px 9px;
+    border-radius: 8px;
+    background: var(--sjf-accent-soft);
+}
+
+.sjf-card-reach i {
+    color: var(--sjf-accent);
+}
+
 .sjf-card.sjf-flash {
     animation: sjf-flash 1.2s ease-out;
 }
