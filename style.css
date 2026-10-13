@@ -947,3 +947,17 @@
     color: var(--sjf-accent);
     box-shadow: inset 0 0 0 2px var(--sjf-accent);
 }
+
+/* Prefill text box in settings */
+#sjf_panel textarea.sjf-textarea {
+    width: 100%;
+    min-height: 64px;
+    margin: 8px 0 0;
+    resize: vertical;
+    font-size: 0.9em;
+}
+
+#sjf_panel textarea.sjf-textarea.sjf-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
