@@ -961,3 +961,11 @@
     opacity: 0.4;
     pointer-events: none;
 }
+
+/* Version line at the bottom of the settings tab */
+.sjf-version {
+    margin: 4px 0 8px;
+    text-align: center;
+    font-size: 0.75em;
+    opacity: 0.55;
+}

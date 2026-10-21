@@ -30,6 +30,7 @@ const defaultSettings = Object.freeze({
     maxTokens: 2000,
     dedupeCount: 10,
     profileId: '',
+    directApi: null,
     panelOpacity: 90,
     conditionsBot: '',
     worldInfoMaxTokens: 2000,
@@ -613,6 +614,64 @@ function getUsableProfiles() {
     }
 }
 
+// Profiles grouped by API type and sorted by name, like ST's own profile dropdown
+function profileGroups(profiles) {
+    const c = ctx();
+    let types = {};
+    try { types = c.ConnectionManagerRequestService?.getAllowedTypes?.() ?? {}; } catch { /* keep empty */ }
+    const groups = new Map();
+    for (const p of profiles) {
+        const type = c.CONNECT_API_MAP?.[p.api]?.selected ?? 'other';
+        if (!groups.has(type)) groups.set(type, []);
+        groups.get(type).push(p);
+    }
+    return [...groups.entries()].map(([type, list]) => el('optgroup', { label: types[type] ?? type },
+        list.sort((a, b) => a.name.localeCompare(b.name)).map(p => el('option', { value: p.id, text: p.name }))));
+}
+
+// Every Chat Completion source and Text Completion type ST knows, with ST's own labels
+function directApiOptions() {
+    const c = ctx();
+    const label = (selectId, value) => document.querySelector(`#${selectId} option[value="${value}"]`)?.textContent?.trim() || value;
+    const cc = new Set();
+    const tc = new Set();
+    for (const v of Object.values(c.CONNECT_API_MAP ?? {})) {
+        if (v.selected === 'openai' && v.source) cc.add(v.source);
+        if (v.selected === 'textgenerationwebui' && v.type) tc.add(v.type);
+    }
+    const sortByLabel = (list) => list.sort((a, b) => a.label.localeCompare(b.label));
+    return {
+        cc: sortByLabel([...cc].map(v => ({ value: v, label: label('chat_completion_source', v) }))),
+        tc: sortByLabel([...tc].map(v => ({ value: v, label: label('textgen_type', v) }))),
+    };
+}
+
+// Models ST lists for a source (from its own model dropdown), plus the one last used there
+function directModelOptions(kind, source) {
+    const c = ctx();
+    const id = kind === 'cc' ? `model_${source === 'makersuite' ? 'google' : source}_select` : `model_${source}_select`;
+    const list = [...document.querySelectorAll(`#${id} option`)].map(o => o.value).filter(Boolean);
+    let current = '';
+    try {
+        current = kind === 'cc'
+            ? c.getChatCompletionModel?.({ ...c.chatCompletionSettings, chat_completion_source: source }) || ''
+            : c.textCompletionSettings?.[`${source}_model`] || '';
+    } catch { /* no saved model */ }
+    return { list: [...new Set([current, ...list].filter(Boolean))], current };
+}
+
+function directApiLabel(api) {
+    const opts = directApiOptions();
+    const found = (api.kind === 'cc' ? opts.cc : opts.tc).find(x => x.value === api.source);
+    return `${found?.label ?? api.source}${api.model ? ` · ${api.model}` : ''}`;
+}
+
+// Name of the profile ST itself is using right now (if any)
+function currentProfileName() {
+    const cm = ctx().extensionSettings.connectionManager;
+    return cm?.profiles?.find(p => p.id === cm.selectedProfile)?.name ?? '';
+}
+
 function getSelectedProfile() {
     const id = getSettings().profileId;
     return id ? getUsableProfiles().find(p => p.id === id) ?? null : null;
@@ -679,6 +738,41 @@ async function requestCompletion(systemPrompt, prompt, maxTokens, signal) {
     if (s.profileId && !profile) {
         toastr.warning('선택한 연결 프로필을 찾을 수 없어서 현재 연결된 API로 생성해요.', '소재공장');
     }
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+        ...(prefill ? [{ role: 'assistant', content: prefill }] : []),
+    ];
+
+    // Direct pick: a source/type with the key saved in ST. ST's current preset supplies the API settings
+    // (auth mode, region, proxy, samplers) but none of its prompts.
+    const direct = !profile && s.directApi?.source ? s.directApi : null;
+    if (direct?.kind === 'cc') {
+        const result = await c.ChatCompletionService.processRequest({
+            stream: false,
+            messages,
+            model: direct.model || undefined,
+            chat_completion_source: direct.source,
+            max_tokens: maxTokens,
+            assistant_prefill: '',
+        }, { presetName: c.chatCompletionSettings?.preset_settings_openai }, true, signal);
+        return typeof result === 'string' ? result : (result?.content ?? '');
+    }
+    if (direct?.kind === 'tc') {
+        const instruct = c.powerUserSettings?.instruct;
+        const result = await c.TextCompletionService.processRequest({
+            stream: false,
+            prompt: messages,
+            model: direct.model || undefined,
+            api_type: direct.source,
+            max_tokens: maxTokens,
+        }, {
+            presetName: c.textCompletionSettings?.preset,
+            instructName: instruct?.enabled ? instruct.preset : undefined,
+        }, true, signal);
+        return typeof result === 'string' ? result : (result?.content ?? '');
+    }
+
     if (!profile) {
         armPromptGuard(systemPrompt);
         // generateRaw has no signal option; it aborts itself on GENERATION_STOPPED
@@ -693,21 +787,18 @@ async function requestCompletion(systemPrompt, prompt, maxTokens, signal) {
     }
 
     const service = c.ConnectionManagerRequestService;
-    const messages = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: prompt },
-        ...(prefill ? [{ role: 'assistant', content: prefill }] : []),
-    ];
     // Text-completion profiles need the messages formatted with the profile's instruct template
     const finalPrompt = service.constructPrompt(messages, profile.id);
-    // includePreset: false -> nothing from the user's chat preset is added; only our messages are sent
+    // includePreset: true -> the profile's preset supplies API settings (sampler, auth mode, region...).
+    // Only its settings are used, never its prompts; our messages are the whole prompt.
+    // The preset's Claude prefill is cleared so only our own prefill (if any) is used.
     const result = await service.sendRequest(profile.id, finalPrompt, maxTokens, {
         stream: false,
         extractData: true,
-        includePreset: false,
+        includePreset: true,
         includeInstruct: true,
         signal,
-    });
+    }, { assistant_prefill: '' });
     return typeof result === 'string' ? result : (result?.content ?? '');
 }
 
@@ -1183,7 +1274,7 @@ function renderRecommendTab() {
     const context = hasChat()
         ? (Number(s.contextTurns) > 0 ? `최근 ${s.contextTurns}턴 참고` : '대화 참고 안 함')
         : '채팅 없음 · 조건만';
-    const apiName = getSelectedProfile()?.name ?? '현재 API';
+    const apiName = getSelectedProfile()?.name ?? (s.directApi?.source ? directApiLabel(s.directApi) : '현재 API');
     const footer = el('div', { class: 'sjf-footer' }, genBtn,
         el('div', { class: 'sjf-footer-meta', text: `${apiName} · ${langName} · ${context}` }));
 
@@ -1509,20 +1600,67 @@ function renderSettingsTab() {
     }, t)));
 
     const profiles = getUsableProfiles();
+    const direct = directApiOptions();
+    const tag = (prefix, list) => list.map(x => el('option', { value: `${prefix}:${x.value}`, text: x.label }));
+    const profileOpts = profileGroups(profiles);
+    profileOpts.forEach(g => {
+        g.label = `연결 프로필 · ${g.label}`;
+        g.querySelectorAll('option').forEach(o => { o.value = `p:${o.value}`; });
+    });
     const apiSelect = el('select', { class: 'text_pole sjf-select' },
-        el('option', { value: '', text: '현재 연결된 API (기본)' }),
-        profiles.map(p => el('option', { value: p.id, text: p.model ? `${p.name} · ${p.model}` : p.name })));
-    apiSelect.value = profiles.some(p => p.id === s.profileId) ? s.profileId : '';
-    apiSelect.addEventListener('change', () => { s.profileId = apiSelect.value; saveSettings(); });
+        el('option', { value: '', text: `현재 연결된 API (기본)${currentProfileName() ? ` · ${currentProfileName()}` : ''}` }),
+        profileOpts,
+        direct.cc.length ? el('optgroup', { label: 'Chat Completion (ST에 저장된 키)' }, tag('cc', direct.cc)) : null,
+        direct.tc.length ? el('optgroup', { label: 'Text Completion (ST에 저장된 주소·키)' }, tag('tc', direct.tc)) : null);
+    const currentValue = () => {
+        if (s.directApi?.source) return `${s.directApi.kind}:${s.directApi.source}`;
+        return profiles.some(p => p.id === s.profileId) ? `p:${s.profileId}` : '';
+    };
+    apiSelect.value = currentValue();
+    if (apiSelect.value !== currentValue()) apiSelect.value = '';
+
+    // Model box, only for a direct pick
+    const modelList = el('datalist', { id: 'sjf_model_list' });
+    const modelInput = el('input', { class: 'text_pole', list: 'sjf_model_list', placeholder: '모델 이름' });
+    const modelRow = el('div', { class: 'sjf-group' }, el('div', { class: 'sjf-label', text: '모델' }), modelInput, modelList);
+    const fillModels = () => {
+        if (!s.directApi?.source) { modelRow.hidden = true; return; }
+        modelRow.hidden = false;
+        const { list } = directModelOptions(s.directApi.kind, s.directApi.source);
+        modelList.replaceChildren(...list.map(m => el('option', { value: m })));
+        modelInput.value = s.directApi.model || '';
+    };
+    modelInput.addEventListener('change', () => { if (s.directApi) { s.directApi.model = modelInput.value.trim(); saveSettings(); } });
+
+    apiSelect.addEventListener('change', () => {
+        const v = apiSelect.value;
+        if (v.startsWith('p:')) {
+            s.profileId = v.slice(2);
+            s.directApi = null;
+        } else if (v.startsWith('cc:') || v.startsWith('tc:')) {
+            const kind = v.slice(0, 2);
+            const source = v.slice(3);
+            s.profileId = '';
+            s.directApi = { kind, source, model: directModelOptions(kind, source).current };
+        } else {
+            s.profileId = '';
+            s.directApi = null;
+        }
+        saveSettings();
+        fillModels();
+    });
+    fillModels();
+
     const missing = s.profileId && !profiles.some(p => p.id === s.profileId);
-    const apiNote = profiles.length
-        ? (missing ? '⚠ 전에 고른 프로필이 없어져서 현재 연결된 API를 써요.' : 'ST 연결 프로필에 저장된 API로 추천만 따로 생성해요. 채팅 연결은 바뀌지 않아요.')
-        : 'ST의 연결 프로필(Connection Profile)이 없어요. API 연결 화면에서 프로필을 저장하면 여기서 고를 수 있어요.';
+    const apiNote = missing
+        ? '⚠ 전에 고른 프로필이 없어져서 현재 연결된 API를 써요.'
+        : '연결 프로필 또는 API를 직접 골라 추천만 따로 생성해요. 키·주소는 ST에 저장된 걸 써요. 채팅 연결은 바뀌지 않아요.';
 
     root.replaceChildren(
         el('div', { class: 'sjf-card sjf-setting' },
             el('div', { class: 'sjf-label' }, icon('fa-plug'), ' 추천에 쓸 API'),
             apiSelect,
+            modelRow,
             el('div', { class: 'sjf-note', text: apiNote })),
         getBotKey() ? buildWorldPicker() : el('div', { class: 'sjf-card sjf-setting' },
             el('div', { class: 'sjf-label' }, icon('fa-book'), ' 월드인포'),
@@ -1566,7 +1704,22 @@ function renderSettingsTab() {
         range('중복 방지로 보낼 이전 결과 수', 'dedupeCount', 0, 20, 1, '새로 뽑을 때 최근 결과를 이만큼 AI에게 보내서 비슷한 소재를 피해요. 0이면 안 보내요. 많을수록 토큰이 더 들어요.'),
         range('최대 응답 토큰', 'maxTokens', 500, 4000, 100, '추천이 중간에 잘리면 올려주세요.'),
         range('패널 불투명도', 'panelOpacity', 70, 100, 5, '낮출수록 뒤 채팅이 비쳐 보여요. 100%면 완전 불투명.', () => applyPanelBackground(), '%'),
+        versionLine(),
     );
+}
+
+let extensionVersion = '';
+
+// Version from this extension's manifest.json
+function versionLine() {
+    const line = el('div', { class: 'sjf-version', text: extensionVersion ? `소재공장 v${extensionVersion}` : '소재공장' });
+    if (!extensionVersion) {
+        fetch(new URL('./manifest.json', import.meta.url), { cache: 'no-cache' })
+            .then(r => r.json())
+            .then(m => { extensionVersion = String(m.version || ''); if (extensionVersion) line.textContent = `소재공장 v${extensionVersion}`; })
+            .catch(() => { /* leave the plain name */ });
+    }
+    return line;
 }
 
 // ---------- Wand menu & slash command ----------
