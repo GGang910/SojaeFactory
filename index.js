@@ -472,7 +472,12 @@ async function buildGenerationPrompt({ rerollOf = null, kind = 'story' } = {}) {
         if (kind === 'random') lines.push(`[This request: random]
 1. Ignore the current scene and chat flow. Use the chat only to understand both characters' personalities and relationship. Standalone ideas that can be dropped in anytime.
 2. Fun, quirky and unexpected enough that the user instantly wants to try it. Nothing bland or predictable.
-3. Not just funny: the reaction should leave room for the relationship to move a little (a surprising side, a flutter, jealousy, true feelings slipping out).`);
+3. Not just funny: the reaction should leave room for the relationship to move a little (a surprising side, a flutter, jealousy, true feelings slipping out).
+4. Mix three kinds across the ideas:
+   - Internet memes: trending couple challenges, relationship tests and debates, balance games, over-the-top personality-test obsession, viral "what if" questions from Korean SNS and women-centered online culture. Never use memes from male-dominated communities.
+   - Humor: playful absurdity, deadpan bits, role reversals, harmless pranks.
+   - Fresh twists: unusual premises the user has likely never seen in RP.
+5. Memes must be localized too: in a non-modern world, turn the meme into an in-world equivalent that keeps the same joke.`);
         else lines.push(`[This request: story-fit]
 1. Start from the current situation, relationship and plot hooks, but not the next action in this scene: something that happens after this scene, a few turns to an episode later. An idea that opens the next phase.
 2. Use the people, places, upcoming events, promises, secrets, objects and backstory from the description, world info, opening and chat, so it only works in this story.
